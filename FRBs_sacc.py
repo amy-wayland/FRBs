@@ -20,7 +20,7 @@ cosmo.compute_growth()
 alpha = 3.5
 zz = np.linspace(0.1, 5, 183)
 nz = zz**2 * np.exp(-alpha*zz)
-zz = nz/np.trapz(nz, zz)
+nz = nz/np.trapz(nz, zz)
 #zz = np.linspace(0, 2, 1024)
 #nz = np.exp(-(0.5*(zz-1.0)/0.15)**2)/np.sqrt(2*np.pi*0.15**2)
 

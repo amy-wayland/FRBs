@@ -267,7 +267,7 @@ for idx, (i, j) in enumerate(spec_indices):
             n_i = np.ones(len(ls)) * 0.28**2 / (ndens[wl_index] * (60 * 180 / np.pi)**2)
             cl -= n_i
         
-    s.add_ell_cl('cl_eb', tracer_i, tracer_j, ls, cl)
+    s.add_ell_cl('cl_ee', tracer_i, tracer_j, ls, cl)
 
 # Add covariance
 s.add_covariance(covar)

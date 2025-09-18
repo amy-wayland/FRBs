@@ -22,7 +22,7 @@ zz = np.linspace(0.1, 5, 183)
 nz = zz**2 * np.exp(-alpha*zz)
 nz = nz/np.trapz(nz, zz)
 #zz = np.linspace(0, 2, 1024)
-#nz = np.exp(-(0.5*(zz-1.0)/0.15)**2)/np.sqrt(2*np.pi*0.15**2)
+#nz = np.exp(-0.5*((zz-1.0)/0.15)**2)/np.sqrt(2*np.pi*0.15**2)
 
 # Lensing redshift distributions
 d = np.load('data/redshift_distributions_lsst.npz')
@@ -74,7 +74,7 @@ nz_integrated = cumulative_trapezoid(nz[::-1], zz[::-1], initial=0)[::-1]
 #%%
 
 F_of_z = 0.9
-W_chi = A * F_of_z * (1+zz) * nz_integrated * dz_dchi
+W_chi = A * F_of_z * (1+zz) * nz_integrated
 
 t_frb = ccl.Tracer()
 t_frb.add_tracer(cosmo, kernel=(chis, W_chi))

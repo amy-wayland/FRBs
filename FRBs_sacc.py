@@ -1,6 +1,5 @@
 import numpy as np
 import pyccl as ccl
-import matplotlib.pyplot as plt
 import sacc
 import HaloProfiles as hp
 
@@ -18,11 +17,10 @@ cosmo.compute_growth()
 
 # FRB redshift distribution
 alpha = 3.5
-zz = np.linspace(0.1, 5, 183)
+zz = np.linspace(0, 2, 128)
+aa = 1/(1+zz)
 nz = zz**2 * np.exp(-alpha*zz)
 nz = nz/np.trapz(nz, zz)
-#zz = np.linspace(0, 2, 1024)
-#nz = np.exp(-0.5*((zz-1.0)/0.15)**2)/np.sqrt(2*np.pi*0.15**2)
 
 # Lensing redshift distributions
 d = np.load('data/redshift_distributions_lsst.npz')
@@ -31,8 +29,6 @@ dndz = d['dndz']
 ndens = d['ndens_arcmin']
 
 #%%
-
-h = cosmo['H0'] / 100
 
 # Want [G] = [cm^3 kg^{-1} s^{-2}]
 G_m3_per_kg_per_s2 = ccl.physical_constants.GNEWT
@@ -49,32 +45,24 @@ km_to_Mpc = 1/(1e6*pc) # 1 km = 3.24078e-20 Mpc
 H0_per_s = cosmo['H0'] * km_to_Mpc
 H0 = H0_per_s
 
-# Want [\chi_H] = [pc/h]
-chi_H_Mpc = ccl.comoving_angular_distance(cosmo, a=1/(1+0.55)) / h
-chi_H_pc = 1e6 * chi_H_Mpc
-chi_H = chi_H_pc
-
-# Prefactor in units of [A] = [pc cm^{-3} h^{-2}]
-A = (3 * H0**2 * cosmo['Omega_b'] * chi_H) / (8 * np.pi * G * mp)
-
-#%%
-
-aa = 1/(1+zz)
-chis = ccl.comoving_radial_distance(cosmo, aa)
-dchi_dz = np.gradient(chis, zz)
-dz_dchi = 1/dchi_dz
+# Prefactor in units of [A] = [cm^{-3}]
+xH = 0.75
+A = (3*cosmo['Omega_b']*H0**2)/(8*np.pi*G*mp) * (1+xH)/2
 
 #%%
 
 from scipy.integrate import cumulative_trapezoid
 
-# Compute cumulative integral of nz from high z to low z
-nz_integrated = cumulative_trapezoid(nz[::-1], zz[::-1], initial=0)[::-1]
+# Cumulative integral of n(z)
+nz_integrated = 1 - cumulative_trapezoid(nz, zz, initial=0)
 
 #%%
 
-F_of_z = 0.9
-W_chi = A * F_of_z * (1+zz) * nz_integrated
+# [W_{\chi}] = [A] = [cm^{-3}]
+# Factor of 1e6 so that Cl is in units of [pc cm^{-3}]
+h = cosmo['H0'] / 100
+chis = ccl.comoving_radial_distance(cosmo, aa)
+W_chi = A * (1+zz) * nz_integrated * 1e6
 
 t_frb = ccl.Tracer()
 t_frb.add_tracer(cosmo, kernel=(chis, W_chi))
@@ -90,7 +78,7 @@ t_wls = [t_wl0, t_wl1, t_wl2, t_wl3, t_wl4]
 
 k_arr = np.logspace(-3, 1, 24)
 lk_arr = np.log(k_arr)
-a_arr = np.linspace(0.1, 1, 32)
+a_arr = aa[::-1]
 
 # Halo model implementation
 hmd_200c = ccl.halos.MassDef200c
@@ -106,12 +94,13 @@ pk_mm = ccl.halos.halomod_Pk2D(cosmo, hmc, pM, lk_arr=lk_arr, a_arr=a_arr)
 pk_ee = ccl.halos.halomod_Pk2D(cosmo, hmc, pE, prof2=pE, lk_arr=lk_arr, a_arr=a_arr)
 pk_em = ccl.halos.halomod_Pk2D(cosmo, hmc, pE, prof2=pM, lk_arr=lk_arr, a_arr=a_arr)
 
+# Non-linear matter power spectrum
+pk = cosmo.get_nonlin_power()
+pk_ee = pk_em = pk_mm = pk
+
 #%%
 
-#pk = cosmo.get_nonlin_power()
-#pk_ee = pk_em = pk_mm = pk
-
-ls = np.unique(np.geomspace(2, 2000, 256).astype(int)).astype(float)
+ls = np.unique(np.geomspace(1, 500, 256).astype(int)).astype(float)
 
 # DM-DM auto-correlation
 cls_frb = ccl.angular_cl(cosmo, t_frb, t_frb, ls, p_of_k_a=pk_ee)
@@ -139,7 +128,7 @@ n_bins = len(ndens)
 cls_wl = np.zeros([n_bins, n_bins, n_ell])
 
 for i in range(n_bins):
-    n_i = np.ones(len(ls)) * 0.28**2 / (ndens[i] * (60 * 180 / np.pi)**2)
+    n_i = np.ones(len(ls))*0.28**2/(ndens[i]*(60*180/np.pi)**2)
     wl_i = t_wls[i]
     for j in range(n_bins):
         wl_j = t_wls[j]
@@ -149,41 +138,6 @@ for i in range(n_bins):
         else:
             cls_wl[i,j,:] = cls_ij
             
-#%%
-
-plt.rcParams.update({
-    "mathtext.fontset": "stix",
-    "font.family": "serif",
-    "font.size": 16})
-
-plt.figure(figsize=(8, 6))
-plt.plot(ls, cls_frb, color='black', linewidth=2, label=r'$\mathcal{D}-\mathcal{D}$')
-plt.xlabel(r'$\ell$', fontsize=24)
-plt.ylabel(r'$C_{\ell}^{\mathcal{DD}} \;\; [\rm pc^2 \, cm^{-6}]$', fontsize=24)
-plt.xlim(2, 2000)
-plt.loglog()
-plt.tick_params(which='both', top=True, right=True, direction='in', width=1, length=5)
-#plt.savefig('dm_power_spectrum_test_plot.pdf', format="pdf", bbox_inches="tight")
-plt.show()
-
-#%%
-
-plt.figure(figsize=(8, 6))
-plt.plot(ls, -cls_x0, color='mediumblue', linewidth=2, label=r'$\gamma^{(0)}-\mathcal{D}$')
-plt.plot(ls, -cls_x1, color='deepskyblue', linewidth=2, label=r'$\gamma^{(1)}-\mathcal{D}$')
-plt.plot(ls, -cls_x2, color='blueviolet', linewidth=2, label=r'$\gamma^{(2)}-\mathcal{D}$')
-plt.plot(ls, -cls_x3, color='hotpink', linewidth=2, label=r'$\gamma^{(3)}-\mathcal{D}$')
-plt.plot(ls, -cls_x4, color='crimson', linewidth=2, label=r'$\gamma^{(4)}-\mathcal{D}$')
-plt.xlabel(r'$\ell$', fontsize=24)
-plt.ylabel(r'$C_{\ell}^{\gamma\mathcal{D}} \;\; [\rm pc \, cm^{-3}]$', fontsize=24)
-plt.xlim(2, 2000)
-plt.ylim(5e-9, 1e-3)
-plt.loglog()
-plt.tick_params(which='both', top=True, right=True, direction='in', width=1, length=5)
-plt.legend(fontsize=20, frameon=False, ncol=2, loc="lower center")
-#plt.savefig('dm_wl_power_spectrum_test_plot.pdf', format="pdf", bbox_inches="tight")
-plt.show()
-
 #%%
 
 # Construct matrix of angular power spectra
@@ -203,7 +157,7 @@ for i in range(n_bins):
 #%%
 
 tracers = [t_frb, t_wl0, t_wl1, t_wl2, t_wl3, t_wl4]
-labels = ['dm_tracer', 'wl_0', 'wl_1', 'wl_2', 'wl_3', 'wl_4']
+labels = ['frb', 'wl_0', 'wl_1', 'wl_2', 'wl_3', 'wl_4']
 n_tracers = len(tracers)
 
 # List of spectra indices
@@ -214,7 +168,7 @@ for i in range(n_tracers):
 
 n_specs = len(spec_indices)
 dl = np.gradient(ls)
-f_sky = 0.1 # note that the FRB sample has f_sky = 0.7 while our WL sample has f_sky = 0.1
+f_sky = 0.35 # note that the FRB sample has f_sky = 0.7 while our WL sample has f_sky = 0.1
 
 # Construct the covariance matrix
 cov = np.zeros((n_specs, n_ell, n_specs, n_ell))
@@ -232,11 +186,24 @@ covar = cov.reshape(n_specs * n_ell, n_specs * n_ell)
 
 #%%
 
+# Calculate S/N for DM-DM
+cl_frb = cls_matrix[0, 0, :] - nl_frb
+var_00 = np.diagonal(cov[0, :, 0, :])
+sn_frb = np.sqrt(np.sum(cl_frb**2 / var_00))
+print(f"S/N (FRB x FRB): {sn_frb:.1f}")
+
+# Calculate S/N for WL-DM
+var_x0 = np.diagonal(cov[1, :, 1, :])
+sn_x0 = np.sqrt(np.sum(cls_x0**2 / var_x0))
+print(f"S/N (WL x FRB): {sn_x0:.1f}")
+
+#%%
+
 # Create SACC object
 s = sacc.Sacc()
 
 # Add FRB dispersion measure tracer
-s.add_tracer('NZ', 'dm_tracer',
+s.add_tracer('NZ', 'frb',
              quantity='galaxy_density',
              spin=0,
              z=zz,
@@ -260,7 +227,7 @@ for idx, (i, j) in enumerate(spec_indices):
     cl = cls_matrix[i, j, :]
     
     if tracer_i == tracer_j:
-        if tracer_i == 'dm_tracer':
+        if tracer_i == 'frb':
             cl -= nl_frb
         elif 'wl_' in tracer_i:
             wl_index = int(tracer_i.split('_')[1])
@@ -273,17 +240,4 @@ for idx, (i, j) in enumerate(spec_indices):
 s.add_covariance(covar)
 
 # Write to SACC file
-s.save_fits("wl-frb.fits", overwrite=True)
-
-#%%
-
-# Calculate S/N for DM-DM
-cl_frb = cls_matrix[0, 0, :]
-var_00 = np.diagonal(cov[0, :, 0, :])
-sn_frb = np.sqrt(np.sum(cl_frb**2 / var_00))
-print(sn_frb)
-
-# Calculate S/N for WL-DM
-var_x0 = np.diagonal(cov[1, :, 1, :])
-sn_x0 = np.sqrt(np.sum(cls_x0**2 / var_x0))
-print(sn_x0)
+s.save_fits("frb-wl_3x2.fits", overwrite=True)

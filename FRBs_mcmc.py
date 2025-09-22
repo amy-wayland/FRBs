@@ -1,150 +1,243 @@
-import sacc
 import numpy as np
 import pyccl as ccl
-import matplotlib.pyplot as plt
-from getdist import plots
-from cobaya import run
+import sacc
+import HaloProfiles as hp
 
 #%%
 
-s = sacc.Sacc.load_fits('wl-frb.fits')
-s.get_tracer_combinations()
-d = s.mean
-cov = s.covariance.dense
-icov = np.linalg.pinv(cov)
+COSMO_P18 = {"Omega_c": 0.26066676,
+             "Omega_b": 0.048974682,
+             "h": 0.6766,
+             "n_s": 0.9665,
+             "sigma8": 0.8102,
+             "matter_power_spectrum": "halofit"}
+             
+cosmo = ccl.Cosmology(**COSMO_P18)
+cosmo.compute_growth()
 
-# Get the l values from the data
-ells, cells = s.get_ell_cl('cl_ee', 'wl_0', 'wl_0')
+# FRB redshift distribution
+alpha = 3.5
+zz = np.linspace(0, 2, 128)
+aa = 1/(1+zz)
+nz = zz**2 * np.exp(-alpha*zz)
+nz = nz/np.trapz(nz, zz)
 
-#%%
-
-# Define the k and a arrays used to compute the non-linear power spectrum
-a_array = np.linspace(1/(1+4.0), 1, 64)
-l10k_array = np.linspace(-3, 1, 255)
-k_array = 10**l10k_array
-
-# Find the index corresponding to the minimum a value of BACCO
-a_min_index = np.where(a_array >= 1/(1+1.5))[0][0]
-
-# Array of a values for which BACCO is calibrated
-a_subset = a_array[a_min_index:]
-
-# Intrinsic alignment model
-def A_IA(amp, eta, z, z_star=0.62):
-    return amp * ((1+z)/(1+z_star))**eta
+# Lensing redshift distributions
+d = np.load('data/redshift_distributions_lsst.npz')
+z = d['z']
+dndz = d['dndz']
+ndens = d['ndens_arcmin']
 
 #%%
 
-hfix = 0.6766
-logh = np.log10(hfix)
+# Want [G] = [cm^3 kg^{-1} s^{-2}]
+G_m3_per_kg_per_s2 = ccl.physical_constants.GNEWT
+G_cm3_per_kg_per_s2 = 1e6 * G_m3_per_kg_per_s2
+G = G_cm3_per_kg_per_s2
 
-def lnprob(Om_m, s8, A_IA0, eta_IA, log_Mc, log_eta, log_beta, log_M1,
-           log_theta_inn, log_theta_out, log_M_inn):
+# Want [m_p] = [kg]
+mp_kg = 1.67262e-27
+mp = mp_kg
+
+# Want [H_0] = [Mpc s^{-1} Mpc^{-1}]
+pc = 3.0857e13 # 1pc in km
+km_to_Mpc = 1/(1e6*pc) # 1 km = 3.24078e-20 Mpc
+H0_per_s = cosmo['H0'] * km_to_Mpc
+H0 = H0_per_s
+
+# Prefactor in units of [A] = [cm^{-3}]
+xH = 0.75
+A = (3*cosmo['Omega_b']*H0**2)/(8*np.pi*G*mp) * (1+xH)/2
+
+#%%
+
+from scipy.integrate import cumulative_trapezoid
+
+# Cumulative integral of n(z)
+nz_integrated = 1 - cumulative_trapezoid(nz, zz, initial=0)
+
+#%%
+
+# [W_{\chi}] = [A] = [cm^{-3}]
+# Factor of 1e6 so that Cl is in units of [pc cm^{-3}]
+h = cosmo['H0'] / 100
+chis = ccl.comoving_radial_distance(cosmo, aa)
+W_chi = A * (1+zz) * nz_integrated * 1e6
+
+t_frb = ccl.Tracer()
+t_frb.add_tracer(cosmo, kernel=(chis, W_chi))
+
+t_wl0 = ccl.WeakLensingTracer(cosmo, dndz=(z, dndz[0,:]))
+t_wl1 = ccl.WeakLensingTracer(cosmo, dndz=(z, dndz[1,:]))
+t_wl2 = ccl.WeakLensingTracer(cosmo, dndz=(z, dndz[2,:]))
+t_wl3 = ccl.WeakLensingTracer(cosmo, dndz=(z, dndz[3,:]))
+t_wl4 = ccl.WeakLensingTracer(cosmo, dndz=(z, dndz[4,:]))
+t_wls = [t_wl0, t_wl1, t_wl2, t_wl3, t_wl4]
+
+#%%
+
+k_arr = np.logspace(-3, 1, 24)
+lk_arr = np.log(k_arr)
+a_arr = aa[::-1]
+
+# Halo model implementation
+hmd_200c = ccl.halos.MassDef200c
+cM = ccl.halos.ConcentrationDuffy08(mass_def=hmd_200c)
+nM = ccl.halos.MassFuncTinker08(mass_def=hmd_200c)
+bM = ccl.halos.HaloBiasTinker10(mass_def=hmd_200c)
+pM = ccl.halos.HaloProfileNFW(mass_def=hmd_200c, concentration=cM)
+pE = hp.HaloProfileDensityHE(mass_def=hmd_200c, concentration=cM, lMc=14.0, beta=0.6, A_star=0.03, eta_b=0.5)
+hmc = ccl.halos.HMCalculator(mass_function=nM, halo_bias=bM, mass_def=hmd_200c, log10M_max=15.0, log10M_min=10.0, nM=32)
+
+# m-m, e-e, and e-m power spectra
+pk_mm = ccl.halos.halomod_Pk2D(cosmo, hmc, pM, lk_arr=lk_arr, a_arr=a_arr)
+pk_ee = ccl.halos.halomod_Pk2D(cosmo, hmc, pE, prof2=pE, lk_arr=lk_arr, a_arr=a_arr)
+pk_em = ccl.halos.halomod_Pk2D(cosmo, hmc, pE, prof2=pM, lk_arr=lk_arr, a_arr=a_arr)
+
+# Non-linear matter power spectrum
+pk = cosmo.get_nonlin_power()
+pk_ee = pk_em = pk_mm = pk
+
+#%%
+
+ls = np.unique(np.geomspace(1, 500, 256).astype(int)).astype(float)
+
+# DM-DM auto-correlation
+cls_frb = ccl.angular_cl(cosmo, t_frb, t_frb, ls, p_of_k_a=pk_ee)
+
+# FRB shot noise
+sigma_host_0 = 90 # cm^{-3} pc
+integrand = nz * sigma_host_0**2 / (1+zz)**2
+sigma_host_sq = np.trapz(integrand, zz)
+n_per_deg_sq = 0.5 # number density per degree squared
+n_per_sr = n_per_deg_sq * (180/np.pi)**2
+nl_frb = np.ones(len(ls)) * sigma_host_sq / n_per_sr
+cls_frb += nl_frb
+
+# WL-DM cross-correlations
+cls_x0 = ccl.angular_cl(cosmo, t_wl0, t_frb, ls, p_of_k_a=pk_em)
+cls_x1 = ccl.angular_cl(cosmo, t_wl1, t_frb, ls, p_of_k_a=pk_em)
+cls_x2 = ccl.angular_cl(cosmo, t_wl2, t_frb, ls, p_of_k_a=pk_em)
+cls_x3 = ccl.angular_cl(cosmo, t_wl3, t_frb, ls, p_of_k_a=pk_em)
+cls_x4 = ccl.angular_cl(cosmo, t_wl4, t_frb, ls, p_of_k_a=pk_em)
+cls_x = [cls_x0, cls_x1, cls_x2, cls_x3, cls_x4]
+
+# WL-WL auto-correlations
+n_ell = len(ls)
+n_bins = len(ndens)
+cls_wl = np.zeros([n_bins, n_bins, n_ell])
+
+for i in range(n_bins):
+    n_i = np.ones(len(ls))*0.28**2/(ndens[i]*(60*180/np.pi)**2)
+    wl_i = t_wls[i]
+    for j in range(n_bins):
+        wl_j = t_wls[j]
+        cls_ij = ccl.angular_cl(cosmo, wl_i, wl_j, ls, p_of_k_a=pk_mm)
+        if i==j: 
+            cls_wl[i,j,:] = cls_ij + n_i
+        else:
+            cls_wl[i,j,:] = cls_ij
+            
+#%%
+
+# Construct matrix of angular power spectra
+n_fields = 1 + n_bins # 1 for FRB DM, n_bins for WL
+cls_matrix = np.zeros((n_fields, n_fields, n_ell))
+
+cls_matrix[0, 0, :] = cls_frb # (0,0): DM-DM
+
+for i in range(n_bins):
+    cls_matrix[0, i+1, :] = cls_x[i] # (0,i): DM-WL
+    cls_matrix[i+1, 0, :] = cls_x[i] # (i,0): WL-DM
     
-    if ((Om_m < 0.23) or
-        (Om_m > 0.40) or
-        (s8 < 0.73) or
-        (s8 > 0.90) or
-        (A_IA0 < -5.0) or 
-        (A_IA0 > 5.0) or
-        (eta_IA < -5.0) or
-        (eta_IA > 5.0) or
-        (log_Mc+logh < 9.0) or
-        (log_Mc+logh > 15.0) or
-        (log_eta < -0.70) or
-        (log_eta > 0.70) or
-        (log_beta < -1.0) or
-        (log_beta > 0.70) or
-        (log_M1+logh < 9.0) or
-        (log_M1+logh > 13.0) or
-        (log_theta_inn < -2.0) or
-        (log_theta_inn > -0.5) or
-        (log_theta_out < 0.0) or
-        (log_theta_out > 0.47) or
-        (log_M_inn+logh < 9.0) or
-        (log_M_inn+logh > 13.5)):
-        return -np.inf
-    
-    cosmo = ccl.Cosmology(Omega_c=Om_m-0.048974682,
-                      Omega_b=0.048974682,
-                      h=hfix,
-                      n_s=0.9665,
-                      sigma8=s8,
-                      transfer_function="eisenstein_hu")
-
-    cosmo.compute_growth()
-    
-    pk_a = np.array([ccl.nonlin_matter_power(cosmo, k_array, a) for a in a_array])
-    
-    bar = ccl.BaccoemuBaryons(log10_M_c=log_Mc, log10_eta=log_eta,
-                              log10_beta=log_beta, log10_M1_z0_cen=log_M1,
-                              log10_theta_out=log_theta_out,
-                              log10_theta_inn=log_theta_inn,
-                              log10_M_inn=log_M_inn)
-    
-    boost = np.zeros([64, 255])
-    bacco_boost = bar.boost_factor(cosmo, k_array, a_subset)
-    boost[a_min_index:, :] = bacco_boost
-    boost[:a_min_index, :] = bacco_boost[0][None, :]
-    pk_bar = pk_a * boost
-    Pk2D = ccl.Pk2D(a_arr=a_array, lk_arr=np.log(k_array), pk_arr=np.log(pk_bar))
-    
-    m = []
-    for t1, t2 in s.get_tracer_combinations():
-        t_wl = ccl.WeakLensingTracer(cosmo, dndz=(s.tracers[t1].z, s.tracers[t2].nz), 
-                                      ia_bias=(s.tracers[t1].z, A_IA(amp=A_IA0, eta=eta_IA, z=s.tracers[t1].z)))
-        t_frb = ccl.NumberCountsTracer(cosmo, dndz=(s.tracers[t2].z, s.tracers[t2].nz), has_rsd=False)
-        Cl = ccl.angular_cl(cosmo, t_wl, t_frb, ells, p_of_k_a=Pk2D)
-        m.append(Cl)
-    m = np.concatenate(m)
-    r = d - m
-    return -0.5 * np.dot(r, np.dot(icov, r))
+for i in range(n_bins):
+    for j in range(n_bins):
+        cls_matrix[i+1, j+1, :] = cls_wl[i, j, :] # (i,j): WL-WL 
 
 #%%
 
-# True values of the cosmological and baryonic parameters used to generate the mock data
-p = np.array([0.26066676+0.048974682, 0.8102, 0, 0, 14.0, -0.3, -0.22, 10.674, -0.86, 0.25, 12.6])
+tracers = [t_frb, t_wl0, t_wl1, t_wl2, t_wl3, t_wl4]
+labels = ['frb', 'wl_0', 'wl_1', 'wl_2', 'wl_3', 'wl_4']
+n_tracers = len(tracers)
+
+# List of spectra indices
+spec_indices = []
+for i in range(n_tracers):
+    for j in range(i, n_tracers):
+        spec_indices.append((i, j))
+
+n_specs = len(spec_indices)
+dl = np.gradient(ls)
+f_sky = 0.35 # note that the FRB sample has f_sky = 0.7 while our WL sample has f_sky = 0.1
+
+# Construct the covariance matrix
+cov = np.zeros((n_specs, n_ell, n_specs, n_ell))
+
+for a, (i, j) in enumerate(spec_indices):
+    for b, (k, l) in enumerate(spec_indices):
+        C_ik = cls_matrix[i, k]
+        C_jl = cls_matrix[j, l]
+        C_il = cls_matrix[i, l]
+        C_jk = cls_matrix[j, k]
+        covar = (C_ik * C_jl + C_il * C_jk) / ((2 * ls + 1) * dl * f_sky)
+        cov[a, :, b, :] = np.diag(covar)
+
+covar = cov.reshape(n_specs * n_ell, n_specs * n_ell)
 
 #%%
 
-info = {"likelihood": {"logprob": lnprob}}
+# Calculate S/N for DM-DM
+cl_frb = cls_matrix[0, 0, :] - nl_frb
+var_00 = np.diagonal(cov[0, :, 0, :])
+sn_frb = np.sqrt(np.sum(cl_frb**2 / var_00))
+print(f"S/N (FRB x FRB): {sn_frb:.1f}")
 
-info["params"] = {
-    "Om_m": {"prior": {"dist": "norm", "loc": p[0], "scale": 0.1}, "ref": p[0], "proposal": 0.01, "latex": r"\Omega_{\mathrm{m}}"},
-    "s8": {"prior": {"dist": "norm", "loc": p[1], "scale": 0.1}, "ref": p[1], "proposal": 0.01, "latex": r"\sigma_8"},
-    "A_IA0" : {"prior": {"dist": "norm", "loc": p[2], "scale": 1.0}, "ref": p[2], "proposal": 0.05, "latex": r"A_{\mathrm{IA}}"},
-    "eta_IA" : {"prior": {"dist": "norm", "loc": p[3], "scale": 1.0}, "ref": p[3], "proposal": 0.05, "latex": r"\eta_{\mathrm{IA}}"},
-    "log_Mc": {"prior": {"dist": "norm", "loc": p[4], "scale": 0.5}, "ref": p[4], "proposal": 0.5, "latex": r"\log M_{\mathrm{c}}"},
-    "log_eta": {"prior": {"dist": "norm", "loc": p[5], "scale": 0.5}, "ref": p[5], "proposal": 0.5, "latex": r"\log \eta"},
-    "log_beta": {"prior": {"dist": "norm", "loc": p[6], "scale": 0.5}, "ref": p[6], "proposal": 0.5, "latex": r"\log \beta"},
-    "log_M1": {"prior": {"dist": "norm", "loc": p[7], "scale": 0.5}, "ref": p[7], "proposal": 0.5, "latex": r"\log M_1"}, 
-    "log_theta_inn": {"prior": {"dist": "norm", "loc": p[8], "scale": 0.5}, "ref": p[8], "proposal": 0.5, "latex": r"\log \theta_{\mathrm{inn}}"}, 
-    "log_theta_out": {"prior": {"dist": "norm", "loc": p[9], "scale": 0.5}, "ref": p[9], "proposal": 0.5, "latex": r"\log \theta_{\mathrm{out}}"}, 
-    "log_M_inn": {"prior": {"dist": "norm", "loc": p[10], "scale": 0.5}, "ref": p[10], "proposal": 0.5, "latex": r"\log M_{\mathrm{inn}}"}}
-
-info["sampler"] = {"mcmc": {"Rminus1_stop": 0.03, "max_tries": 1000}}
-
-info["output"] = "wl-frb"
+# Calculate S/N for WL-DM
+var_x0 = np.diagonal(cov[1, :, 1, :])
+sn_x0 = np.sqrt(np.sum(cls_x0**2 / var_x0))
+print(f"S/N (WL x FRB): {sn_x0:.1f}")
 
 #%%
 
-updated_info, sampler = run(info)
+# Create SACC object
+s = sacc.Sacc()
 
-#%%
+# Add FRB dispersion measure tracer
+s.add_tracer('NZ', 'frb',
+             quantity='galaxy_density',
+             spin=0,
+             z=zz,
+             nz=nz,
+             extra_columns={'error': 0.1 * nz})
 
-gd_sample = sampler.products(to_getdist=True, skip_samples=0.3)["sample"]
+# Add weak lensing tracers
+for i in range(n_bins):
+    s.add_tracer('NZ', 'wl_{x}'.format(x=i),
+                 quantity='galaxy_shear',
+                 spin=2,
+                 z=z,
+                 nz=dndz[i,:],
+                 extra_columns={'error': 0.1*dndz[i,:]},
+                 sigma_g=0.28)
 
-mean = gd_sample.getMeans()[:11]
-covmat = gd_sample.getCovMat().matrix[:11, :11]
-print("Mean:", mean)
-print("Covariance matrix:", covmat)
+# Add the angular power spectra
+for idx, (i, j) in enumerate(spec_indices):
+    tracer_i = labels[i]
+    tracer_j = labels[j]
+    cl = cls_matrix[i, j, :]
+    
+    if tracer_i == tracer_j:
+        if tracer_i == 'frb':
+            cl -= nl_frb
+        elif 'wl_' in tracer_i:
+            wl_index = int(tracer_i.split('_')[1])
+            n_i = np.ones(len(ls)) * 0.28**2 / (ndens[wl_index] * (60 * 180 / np.pi)**2)
+            cl -= n_i
+        
+    s.add_ell_cl('cl_ee', tracer_i, tracer_j, ls, cl)
 
-g = plots.get_subplot_plotter(subplot_size=3)
-g.settings.legend_fontsize = 32
-g.settings.axes_labelsize = 30
-g.settings.axes_fontsize = 20
-g.settings.figure_legend_frame = False
+# Add covariance
+s.add_covariance(covar)
 
-g.triangle_plot(gd_sample, ["Om_m", "s8", "log_Mc", "log_eta", "log_beta", "log_M1", "log_theta_inn", "log_theta_out", "log_M_inn"], filled=True)
-plt.savefig('posteriors_wl_frb.png', dpi=100)
-plt.show()
+# Write to SACC file
+s.save_fits("frb-wl_3x2.fits", overwrite=True)

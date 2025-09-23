@@ -65,6 +65,14 @@ h = cosmo['H0'] / 100
 chis = ccl.comoving_radial_distance(cosmo, aa)
 W_chi = A * (1+zz) * nz_integrated * 1e6
 W_chi_a = A * (1+zz) * nz_integrated_a * 1e6
+#W_chi[chis<400] = 0.0
+#W_chi_a[chis<400] = 0.0
+
+# W(chi) d(chi) = W(z) dz x d(chi)/dz
+dchi_dz = np.gradient(chis, zz)
+dz_dchi = 1/dchi_dz
+W_z = W_chi * dchi_dz
+W_z_a = W_chi_a * dchi_dz
 
 t_frb = ccl.Tracer()
 t_frb.add_tracer(cosmo, kernel=(chis, W_chi))
@@ -93,27 +101,7 @@ plt.show()
 
 #%%
 
-# W(chi) d(chi) = W(z) dz x d(chi)/dz
-dchi_dz = np.gradient(chis, zz)
-dz_dchi = 1/dchi_dz
-W_z = W_chi * dchi_dz
-W_z_a = W_chi_a * dchi_dz
-
-# Plot radial kernels as a function of z
-plt.figure(figsize=(8, 6))
-plt.plot(zz, W_z_a, linewidth=2, color='crimson', label=r'$n_{\rm Alonso}(z)$')
-plt.plot(zz, W_z, linewidth=2, color='mediumblue', label=r'$n_{\rm Reischke}(z)$')
-plt.xlabel(r'$z$', fontsize=24)
-plt.ylabel(r'$W(\chi(z))$', fontsize=24)
-plt.xlim(0, 2)
-plt.tick_params(which='both', top=True, right=True, direction='in', width=1, length=5)
-plt.legend(fontsize=20, frameon=False, ncol=1, loc="upper right")
-#plt.savefig('dm_radial_kernel.pdf', format="pdf", bbox_inches="tight")
-plt.show()
-
-#%%
-
-k_arr = np.logspace(-3, 1, 24)
+k_arr = np.logspace(-3, 3, 48)
 lk_arr = np.log(k_arr)
 a_arr = aa[::-1]
 
@@ -155,11 +143,10 @@ plt.plot(ls, cls_frb_0a, color='mediumblue', linestyle='dashed', label=r'$n_{\rm
 plt.xlabel(r'$\ell$', fontsize=24)
 plt.ylabel(r'$C_{\ell}^{\mathcal{DD}} \;\; [\rm pc^2 \, cm^{-6}]$', fontsize=24)
 plt.xlim(1, 500)
-#plt.ylim(1e-2, 5e2)
 plt.loglog()
 plt.tick_params(which='both', top=True, right=True, direction='in', width=1, length=5)
 plt.legend(fontsize=20, frameon=False, ncol=1, loc="lower left")
-plt.savefig('dm_effect_of_nz.pdf', format="pdf", bbox_inches="tight")
+#plt.savefig('dm_effect_of_nz.pdf', format="pdf", bbox_inches="tight")
 plt.show()
 
 #%%
@@ -180,7 +167,7 @@ plt.plot(ls, cls_frb_00+nl_frb, color='mediumblue', linewidth=2, label=r'$n_{\rm
 plt.plot(ls, cls_frb_0a+nl_frb, color='mediumblue', linestyle='dashed', label=r'$n_{\rm Reischke}(z)$, $P_{\rm nonlin}(k)$')
 plt.xlabel(r'$\ell$', fontsize=24)
 plt.ylabel(r'$C_{\ell}^{\mathcal{DD}} + N_{\ell}^{\mathcal{DD}} \;\; [\rm pc^2 \, cm^{-6}]$', fontsize=24)
-plt.xlim(2, 2000)
+plt.xlim(1, 500)
 plt.loglog()
 plt.tick_params(which='both', top=True, right=True, direction='in', width=1, length=5)
 plt.legend(fontsize=20, frameon=False, ncol=1, loc="upper right")
@@ -221,8 +208,7 @@ plt.figure(figsize=(8, 6))
 plt.plot(ls, cls_frb_0a, color='black', linewidth=2, label=r'$\mathcal{D}-\mathcal{D}$')
 plt.xlabel(r'$\ell$', fontsize=24)
 plt.ylabel(r'$C_{\ell}^{\mathcal{DD}} \;\; [\rm pc^2 \, cm^{-6}]$', fontsize=24)
-plt.xlim(2, 2000)
-plt.ylim(1e-2, 2e2)
+plt.xlim(2, 500)
 plt.loglog()
 plt.tick_params(which='both', top=True, right=True, direction='in', width=1, length=5)
 #plt.savefig('dm_power_spectrum_test_plot.pdf', format="pdf", bbox_inches="tight")
@@ -239,8 +225,8 @@ plt.plot(ls, cls_x3, color='hotpink', linewidth=2, label=r'$\gamma^{(3)}-\mathca
 plt.plot(ls, cls_x4, color='crimson', linewidth=2, label=r'$\gamma^{(4)}-\mathcal{D}$')
 plt.xlabel(r'$\ell$', fontsize=24)
 plt.ylabel(r'$C_{\ell}^{\gamma\mathcal{D}} \;\; [\rm pc \, cm^{-3}]$', fontsize=24)
-plt.xlim(2, 2000)
-plt.ylim(1e-7, 2e-3)
+plt.xlim(2, 500)
+plt.ylim(6e-7, 2e-3)
 plt.loglog()
 plt.tick_params(which='both', top=True, right=True, direction='in', width=1, length=5)
 plt.legend(fontsize=20, frameon=False, ncol=2, loc="lower center")

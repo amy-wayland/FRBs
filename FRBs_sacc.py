@@ -76,7 +76,7 @@ t_wls = [t_wl0, t_wl1, t_wl2, t_wl3, t_wl4]
 
 #%%
 
-k_arr = np.logspace(-3, 1, 24)
+k_arr = np.logspace(-3, 3, 48)
 lk_arr = np.log(k_arr)
 a_arr = aa[::-1]
 
@@ -93,10 +93,6 @@ hmc = ccl.halos.HMCalculator(mass_function=nM, halo_bias=bM, mass_def=hmd_200c, 
 pk_mm = ccl.halos.halomod_Pk2D(cosmo, hmc, pM, lk_arr=lk_arr, a_arr=a_arr)
 pk_ee = ccl.halos.halomod_Pk2D(cosmo, hmc, pE, prof2=pE, lk_arr=lk_arr, a_arr=a_arr)
 pk_em = ccl.halos.halomod_Pk2D(cosmo, hmc, pE, prof2=pM, lk_arr=lk_arr, a_arr=a_arr)
-
-# Non-linear matter power spectrum
-pk = cosmo.get_nonlin_power()
-pk_ee = pk_em = pk_mm = pk
 
 #%%
 
@@ -233,8 +229,15 @@ for idx, (i, j) in enumerate(spec_indices):
             wl_index = int(tracer_i.split('_')[1])
             n_i = np.ones(len(ls)) * 0.28**2 / (ndens[wl_index] * (60 * 180 / np.pi)**2)
             cl -= n_i
+    
+    if tracer_i == 'frb' and tracer_j == 'frb':
+        cl_type = 'cl_00'
+    elif (tracer_i == 'frb' and 'wl_' in tracer_j) or ('wl_' in tracer_i and tracer_j == 'frb'):
+        cl_type = 'cl_0e'
+    else:
+        cl_type = 'cl_ee'
         
-    s.add_ell_cl('cl_ee', tracer_i, tracer_j, ls, cl)
+    s.add_ell_cl(cl_type, tracer_i, tracer_j, ls, cl)
 
 # Add covariance
 s.add_covariance(covar)

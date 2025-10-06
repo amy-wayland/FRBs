@@ -79,9 +79,9 @@ pE = hp.HaloProfileDensityHE(mass_def=hmd_200c, concentration=cM, lMc=14.0, beta
 
 #%%
 
-def lnprob(lMc, eta_b, DM_DM=True, DM_WL=True, WL_WL=False):
+def lnprob(lMc, eta_b, alpha, DM_DM=True, DM_WL=True, WL_WL=False):
     
-    if eta_b < 0:
+    if eta_b < 0 or alpha < 0:
         return -np.inf
     
     pM.update_parameters(lMc=lMc, eta_b=eta_b)
@@ -93,13 +93,13 @@ def lnprob(lMc, eta_b, DM_DM=True, DM_WL=True, WL_WL=False):
     pk_mm = None
     
     if DM_DM or DM_WL:
-        z_arr = s.tracers['frb'].z
-        nz_arr = s.tracers['frb'].nz
-        nz_arr /= np.trapezoid(nz_arr, z_arr)
-        a_arr = 1/(1+z_arr)
-        chis = ccl.comoving_radial_distance(cosmo, a_arr)
-        nz_integrated = 1 - cumulative_trapezoid(nz_arr, z_arr, initial=0)
-        W_chi = A * (1+z_arr) * nz_integrated * 1e6
+        zz = s.tracers['frb'].z
+        aa = 1/(1+zz)
+        nz = zz**2 * np.exp(-alpha*zz)
+        nz /= np.trapz(nz, zz)
+        chis = ccl.comoving_radial_distance(cosmo, aa)
+        nz_integrated = 1 - cumulative_trapezoid(nz, zz, initial=0)
+        W_chi = A * (1+zz) * nz_integrated * 1e6
         t_dm = ccl.Tracer()
         t_dm.add_tracer(cosmo, kernel=(chis, W_chi))
         
@@ -111,13 +111,13 @@ def lnprob(lMc, eta_b, DM_DM=True, DM_WL=True, WL_WL=False):
                 tracers_wl.append(ccl.WeakLensingTracer(cosmo, dndz=(tracer.z, tracer.nz)))
     
     if DM_DM:
-        pk_ee = ccl.halos.halomod_Pk2D(cosmo, hmc, pE, lk_arr=lk_arr, a_arr=a_arr[::-1])
+        pk_ee = ccl.halos.halomod_Pk2D(cosmo, hmc, pE, lk_arr=lk_arr, a_arr=aa[::-1])
         
     if DM_WL:
-        pk_em = ccl.halos.halomod_Pk2D(cosmo, hmc, pE, prof2=pM, lk_arr=lk_arr, a_arr=a_arr[::-1])
+        pk_em = ccl.halos.halomod_Pk2D(cosmo, hmc, pE, prof2=pM, lk_arr=lk_arr, a_arr=aa[::-1])
         
     if WL_WL:
-        pk_mm = ccl.halos.halomod_Pk2D(cosmo, hmc, pM, lk_arr=lk_arr, a_arr=a_arr[::-1])
+        pk_mm = ccl.halos.halomod_Pk2D(cosmo, hmc, pM, lk_arr=lk_arr, a_arr=aa[::-1])
         
     for t1, t2 in s.get_tracer_combinations():
         i = name_to_index[t1]
@@ -132,10 +132,12 @@ def lnprob(lMc, eta_b, DM_DM=True, DM_WL=True, WL_WL=False):
             ti = t_dm
             tj = tracers_wl[j-1]
             pk = pk_em
-        if i != 0 and j != 0: # WL-WL
-            ti = tracers_wl[i-1]
-            tj = tracers_wl[j-1]
-            pk = pk_mm
+        else: 
+            continue
+        #if i != 0 and j != 0: # WL-WL
+         #   ti = tracers_wl[i-1]
+         #   tj = tracers_wl[j-1]
+         #   pk = pk_mm
         cl = ccl.angular_cl(cosmo, ti, tj, ells, p_of_k_a=pk)
         cls_matrix[i, j, :] = cl
         cls_matrix[j, i, :] = cl
@@ -151,7 +153,7 @@ def lnprob(lMc, eta_b, DM_DM=True, DM_WL=True, WL_WL=False):
 
 import time
 start = time.time()
-p = np.array([14.0, 0.5])
+p = np.array([14.0, 0.5, 3.5])
 stop = time.time()
 print(stop-start)
 print(round(-lnprob(*p),2))
@@ -162,7 +164,8 @@ info = {"likelihood": {"logprob": lnprob}}
 
 info["params"] = {
     "lMc": {"prior": {"dist": "norm", "loc": p[0], "scale": 0.5}, "ref": p[0], "proposal": 0.5, "latex": r"\log_{10} M_{\mathrm{c}}"},
-    "eta_b": {"prior": {"dist": "norm", "loc": p[1], "scale": 0.5}, "ref": p[1], "proposal": 0.5, "latex": r"\eta_{\rm b}"}}
+    "eta_b": {"prior": {"dist": "norm", "loc": p[1], "scale": 0.5}, "ref": p[1], "proposal": 0.5, "latex": r"\eta_{\rm b}"},
+    "alpha": {"prior": {"dist": "norm", "loc": p[2], "scale": 0.5}, "ref": p[2], "proposal": 0.5, "latex": r"\alpha"}}
 
 info["sampler"] = {"mcmc": {"Rminus1_stop": 0.03, "max_tries": 1000}}
 
@@ -176,8 +179,8 @@ updated_info, sampler = run(info)
 
 gd_sample = sampler.products(to_getdist=True, skip_samples=0.3)["sample"]
 
-mean = gd_sample.getMeans()[:2]
-covmat = gd_sample.getCovMat().matrix[:2, :2]
+mean = gd_sample.getMeans()[:3]
+covmat = gd_sample.getCovMat().matrix[:3, :3]
 print("Mean:", mean)
 print("Covariance matrix:", covmat)
 

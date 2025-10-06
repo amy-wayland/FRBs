@@ -9,21 +9,8 @@ from scipy.integrate import cumulative_trapezoid
 
 #%%
 
-COSMO_P18 = {"Omega_c": 0.26066676,
-             "Omega_b": 0.048974682,
-             "h": 0.6766,
-             "n_s": 0.9665,
-             "sigma8": 0.8102,
-             "matter_power_spectrum": "halofit"}
-             
-cosmo = ccl.Cosmology(**COSMO_P18)
-cosmo.compute_growth()
-
-#%%
-
 s = sacc.Sacc.load_fits('frb-wl_3x2.fits')
 
-# Remove WL-WL correlations for now
 keep_types = []
 for t1, t2 in s.get_tracer_combinations():
     if t1 == 'frb' and t2 == 'frb':
@@ -32,8 +19,6 @@ for t1, t2 in s.get_tracer_combinations():
         keep_types.append(('cl_ee', t1, t2))
 
 s.remove_selection(lambda t, t1, t2, l: (t, t1, t2) not in keep_types)
-
-#%%
 
 d = s.mean
 cov = s.covariance.dense
@@ -67,22 +52,30 @@ mp_kg = 1.67262e-27
 mp = mp_kg
 pc = 3.0857e13
 km_to_Mpc = 1/(1e6*pc)
-H0_per_s = cosmo['H0'] * km_to_Mpc
-H0 = H0_per_s
 xH = 0.75
-A = (3*cosmo['Omega_b']*H0**2)/(8*np.pi*G*mp) * (1+xH)/2
 
 #%%
 
 pM = hp.HaloProfileNFWBaryon(mass_def=hmd_200c, concentration=cM, lMc=14.0, beta=0.6, A_star=0.03, eta_b=0.5)
 pE = hp.HaloProfileDensityHE(mass_def=hmd_200c, concentration=cM, lMc=14.0, beta=0.6, A_star=0.03, eta_b=0.5)
 
-#%%
-
-def lnprob(lMc, eta_b, DM_DM=True, DM_WL=True, WL_WL=False):
+def lnprob(Om_m, s8, lMc, eta_b, DM_DM=True, DM_WL=True, WL_WL=False):
     
     if eta_b < 0:
         return -np.inf
+    
+    cosmo = ccl.Cosmology(Omega_c=Om_m-0.048974682,
+                      Omega_b=0.048974682,
+                      h=0.6766,
+                      n_s=0.9665,
+                      sigma8=s8,
+                      matter_power_spectrum='halofit')
+    
+    cosmo.compute_growth()
+    
+    H0_per_s = cosmo['H0'] * km_to_Mpc
+    H0 = H0_per_s
+    A = (3*cosmo['Omega_b']*H0**2)/(8*np.pi*G*mp) * (1+xH)/2
     
     pM.update_parameters(lMc=lMc, eta_b=eta_b)
     pE.update_parameters(lMc=lMc, eta_b=eta_b)
@@ -95,7 +88,7 @@ def lnprob(lMc, eta_b, DM_DM=True, DM_WL=True, WL_WL=False):
     if DM_DM or DM_WL:
         z_arr = s.tracers['frb'].z
         nz_arr = s.tracers['frb'].nz
-        nz_arr /= np.trapezoid(nz_arr, z_arr)
+        nz_arr /= np.trapz(nz_arr, z_arr)
         a_arr = 1/(1+z_arr)
         chis = ccl.comoving_radial_distance(cosmo, a_arr)
         nz_integrated = 1 - cumulative_trapezoid(nz_arr, z_arr, initial=0)
@@ -132,10 +125,12 @@ def lnprob(lMc, eta_b, DM_DM=True, DM_WL=True, WL_WL=False):
             ti = t_dm
             tj = tracers_wl[j-1]
             pk = pk_em
-        if i != 0 and j != 0: # WL-WL
-            ti = tracers_wl[i-1]
-            tj = tracers_wl[j-1]
-            pk = pk_mm
+        else:
+            continue
+        #if i != 0 and j != 0: # WL-WL
+        #    ti = tracers_wl[i-1]
+        #    tj = tracers_wl[j-1]
+        #    pk = pk_mm
         cl = ccl.angular_cl(cosmo, ti, tj, ells, p_of_k_a=pk)
         cls_matrix[i, j, :] = cl
         cls_matrix[j, i, :] = cl
@@ -151,7 +146,7 @@ def lnprob(lMc, eta_b, DM_DM=True, DM_WL=True, WL_WL=False):
 
 import time
 start = time.time()
-p = np.array([14.0, 0.5])
+p = np.array([0.26066676+0.048974682, 0.8102, 14.0, 0.5])
 stop = time.time()
 print(stop-start)
 print(round(-lnprob(*p),2))
@@ -161,8 +156,10 @@ print(round(-lnprob(*p),2))
 info = {"likelihood": {"logprob": lnprob}}
 
 info["params"] = {
-    "lMc": {"prior": {"dist": "norm", "loc": p[0], "scale": 0.5}, "ref": p[0], "proposal": 0.5, "latex": r"\log_{10} M_{\mathrm{c}}"},
-    "eta_b": {"prior": {"dist": "norm", "loc": p[1], "scale": 0.5}, "ref": p[1], "proposal": 0.5, "latex": r"\eta_{\rm b}"}}
+    "Om_m": {"prior": {"dist": "norm", "loc": p[0], "scale": 0.1}, "ref": p[0], "proposal": 0.01, "latex": r"\Omega_{\mathrm{m}}"},
+    "s8": {"prior": {"dist": "norm", "loc": p[1], "scale": 0.1}, "ref": p[1], "proposal": 0.01, "latex": r"\sigma_8"},
+    "lMc": {"prior": {"dist": "norm", "loc": p[2], "scale": 0.5}, "ref": p[2], "proposal": 0.5, "latex": r"\log_{10} M_{\mathrm{c}}"},
+    "eta_b": {"prior": {"dist": "norm", "loc": p[3], "scale": 0.5}, "ref": p[3], "proposal": 0.5, "latex": r"\eta_{\rm b}"}}
 
 info["sampler"] = {"mcmc": {"Rminus1_stop": 0.03, "max_tries": 1000}}
 
@@ -176,8 +173,8 @@ updated_info, sampler = run(info)
 
 gd_sample = sampler.products(to_getdist=True, skip_samples=0.3)["sample"]
 
-mean = gd_sample.getMeans()[:2]
-covmat = gd_sample.getCovMat().matrix[:2, :2]
+mean = gd_sample.getMeans()[:4]
+covmat = gd_sample.getCovMat().matrix[:4, :4]
 print("Mean:", mean)
 print("Covariance matrix:", covmat)
 
@@ -187,6 +184,6 @@ g.settings.axes_labelsize = 30
 g.settings.axes_fontsize = 20
 g.settings.figure_legend_frame = False
 
-g.triangle_plot(gd_sample, ["lMc", "eta_b"], filled=True)
+g.triangle_plot(gd_sample, ["Om_m", "s8", "lMc", "eta_b"], filled=True)
 plt.savefig('posteriors_frb.png', dpi=100)
 plt.show()
